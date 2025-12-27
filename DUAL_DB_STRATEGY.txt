@@ -1,0 +1,11 @@
+
+// This folder serves as the "Backend" API for the Next.js application.
+// Technical Breakdown:
+// 1. [Storage]: We use Prisma (PostgreSQL/MySQL) to store the User's projects.
+//    - Why? We need a relational DB to manage Users, Permissions, and Project Metadata. "Moon Modeler" metadata is structured.
+// 2. [Modeling]: The 'content' of a Project is stored as JSON.
+//    - If Project.type === 'MONGODB', the JSON contains Collections/Documents.
+//    - If Project.type === 'MYSQL', the JSON contains Tables/Columns/FKs.
+// 3. [Reverse Engineering]:
+//    - We have installed 'mysql2' and 'mongodb' native drivers.
+//    - These are NOT used for our App's DB. They are used to connect to the *User's* database to read their schema.
