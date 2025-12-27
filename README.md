@@ -156,7 +156,7 @@ MIT
 
 **Aaditya kumar singh**
 - Email: kumaraaditya324@gmail.com
-- GitHub: [@your-username](https://github.com/your-username)
+- GitHub: [Aaditya kumar singh](https://github.com/Aaditya kumar singh)
 
 ## 🙏 Acknowledgments
 
