@@ -15,6 +15,15 @@ export class ProjectsService extends BaseHelper<Project> {
         const validated = CreateProjectSchema.parse(data);
 
         return prisma.$transaction(async (tx) => {
+            // DEV HAXX: Ensure mock user exists so FK doesn't fail
+            if (userId === 'mock-user-id') {
+                await tx.user.upsert({
+                    where: { id: userId },
+                    create: { id: userId, email: 'mock@example.com', name: 'Mock User' },
+                    update: {},
+                });
+            }
+
             // 1. Create Project
             const project = await tx.project.create({
                 data: {
@@ -47,62 +56,60 @@ export class ProjectsService extends BaseHelper<Project> {
     }
 
     async saveDiagram(projectId: string, content: any, userId: string, expectedVersion?: number, forceSnapshot: boolean = false) {
-        // Explicitly defining the transaction callback type can help some IDEs
-        return prisma.$transaction(async (tx) => {
-            // 1. Validate JSON
-            ProjectsValidator.validateDiagram(content);
+        // 1. Validate JSON
+        ProjectsValidator.validateDiagram(content);
 
-            // 2. Fetch current state
-            // Forced cast to ensure 'version' is recognized if IDE is stale
-            const current = await tx.project.findUnique({ where: { id: projectId } }) as Project;
+        // 2. Hash New Content
+        const newHash = this.createHash(content);
 
-            if (!current) throw ApiError.notFound('Project', projectId);
+        // 3. Fetch current state (No Transaction)
+        // Forced cast to ensure 'version' is recognized if IDE is stale
+        const current = await prisma.project.findUnique({ where: { id: projectId } }) as Project;
 
-            // Optimistic Locking Check
-            if (expectedVersion !== undefined && (current as any).version !== expectedVersion) {
-                // We throw a special error that Controller can catch as 409
-                throw ApiError.conflict('Project has been modified by another user. Reload required.');
-            }
+        if (!current) throw ApiError.notFound('Project', projectId);
 
-            // RBAC Check (Simple Owner check for now)
-            if (current.userId !== userId && !current.teamId) {
-                // Allow if team member... (todo)
-            }
+        // Optimistic Locking Check
+        if (expectedVersion !== undefined && (current as any).version !== expectedVersion) {
+            throw ApiError.conflict('Project has been modified by another user. Reload required.');
+        }
 
-            // 3. Auto-Versioning Logic (Smart Throttling)
-            const currentHash = this.createHash(current.content);
-            const newHash = this.createHash(content);
+        // RBAC Check
+        if (current.userId !== userId && !current.teamId) {
+            // Allow if team member... (todo)
+        }
 
-            if (currentHash !== newHash || forceSnapshot) {
-                // Check last version time
-                const lastVersion = await tx.projectVersion.findFirst({
-                    where: { projectId },
-                    orderBy: { createdAt: 'desc' }
-                });
+        // 4. Auto-Versioning Logic (Smart Throttling)
+        const currentHash = this.createHash(current.content);
 
-                const FIVE_MINUTES = 5 * 60 * 1000;
-                const shouldSaveVersion = forceSnapshot || !lastVersion || (Date.now() - lastVersion.createdAt.getTime() > FIVE_MINUTES);
-
-                if (shouldSaveVersion) {
-                    await tx.projectVersion.create({
-                        data: {
-                            projectId,
-                            content: current.content ?? {}, // Saving the OLD state as backup
-                            description: forceSnapshot ? 'Backup before Restore' : 'Auto-save (Smart)',
-                        },
-                    });
-                }
-            }
-
-            // 4. Update the live project with Version Increment
-            return tx.project.update({
-                where: { id: projectId },
-                data: {
-                    content,
-                    // @ts-ignore: Version field exists in DB but types might be stale
-                    version: { increment: 1 } // ATOMIC INCREMENT
-                }
+        if (currentHash !== newHash || forceSnapshot) {
+            // Check last version time
+            const lastVersion = await prisma.projectVersion.findFirst({
+                where: { projectId },
+                orderBy: { createdAt: 'desc' }
             });
+
+            const FIVE_MINUTES = 5 * 60 * 1000;
+            const shouldSaveVersion = forceSnapshot || !lastVersion || (Date.now() - lastVersion.createdAt.getTime() > FIVE_MINUTES);
+
+            if (shouldSaveVersion) {
+                await prisma.projectVersion.create({
+                    data: {
+                        projectId,
+                        content: current.content ?? {}, // Saving the OLD state as backup
+                        description: forceSnapshot ? 'Backup before Restore' : 'Auto-save (Smart)',
+                    },
+                });
+            }
+        }
+
+        // 5. Update the live project with Version Increment
+        return prisma.project.update({
+            where: { id: projectId },
+            data: {
+                content,
+                // @ts-ignore: Version field exists in DB but types might be stale
+                version: { increment: 1 } // ATOMIC INCREMENT
+            }
         });
     }
 

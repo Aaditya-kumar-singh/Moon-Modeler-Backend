@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "next dev",
+    "dev:socket": "tsx src/main.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --ext .ts,.tsx",
@@ -25,6 +26,7 @@
     "next-auth": "beta",
     "react": "^18",
     "react-dom": "^18",
+    "socket.io": "^4.8.3",
     "ssh2": "^1.17.0",
     "winston": "latest",
     "winston-daily-rotate-file": "latest",
@@ -47,6 +49,7 @@
     "prettier": "^3.7.4",
     "prisma": "5.10.2",
     "ts-jest": "^29.4.6",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   },
   "lint-staged": {
