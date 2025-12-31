@@ -47,12 +47,67 @@ export class ProjectsService extends BaseHelper<Project> {
         });
     }
 
-    async getUserProjects(userId: string) {
-        return this.getAllObjects({
-            where: { userId },
-            orderBy: { updatedAt: 'desc' },
-            include: { team: true }, // Show team info if any
-        });
+    async getUserProjects(userId: string, options: {
+        page?: number;
+        limit?: number;
+        type?: 'MONGODB' | 'MYSQL';
+        sortBy?: string;
+        sortOrder?: 'asc' | 'desc';
+    } = {}) {
+        const page = options.page || 1;
+        const limit = options.limit || 10;
+        const skip = (page - 1) * limit;
+        const orderBy = { [options.sortBy || 'updatedAt']: options.sortOrder || 'desc' };
+
+        const where: Prisma.ProjectWhereInput = { userId };
+        if (options.type) {
+            where.type = options.type;
+        }
+
+        const [total, projects] = await Promise.all([
+            prisma.project.count({ where }),
+            this.getAllObjects({
+                where,
+                orderBy,
+                skip,
+                take: limit,
+                select: {
+                    id: true,
+                    name: true,
+                    type: true,
+                    description: true,
+                    userId: true,
+                    teamId: true,
+                    createdAt: true,
+                    updatedAt: true,
+                    version: true,
+                    team: true,
+                    // content field is EXPLICITLY OMITTED to optimize performance
+                },
+            })
+        ]);
+
+        return {
+            projects,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            }
+        };
+    }
+
+    async getProjectById(id: string, userId: string) {
+        const project = await this.getObjectById(id);
+        if (!project) throw ApiError.notFound('Project', id);
+
+        // Access Control: Check ownership or Team membership
+        if (project.userId !== userId && !project.teamId) {
+            throw ApiError.forbidden('You do not have permission to view this project.');
+        }
+
+        return project;
     }
 
     async saveDiagram(projectId: string, content: any, userId: string, expectedVersion?: number, forceSnapshot: boolean = false) {
@@ -113,12 +168,30 @@ export class ProjectsService extends BaseHelper<Project> {
         });
     }
 
-    async getVersions(projectId: string) {
-        return prisma.projectVersion.findMany({
-            where: { projectId },
-            orderBy: { createdAt: 'desc' },
-            take: 20, // Limit history
-        });
+    async getVersions(projectId: string, options: { page?: number; limit?: number } = {}) {
+        const page = options.page || 1;
+        const limit = options.limit || 20;
+        const skip = (page - 1) * limit;
+
+        const [total, versions] = await Promise.all([
+            prisma.projectVersion.count({ where: { projectId } }),
+            prisma.projectVersion.findMany({
+                where: { projectId },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limit,
+            })
+        ]);
+
+        return {
+            versions,
+            meta: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            }
+        };
     }
 
     async restoreVersion(projectId: string, versionId: string, userId: string) {

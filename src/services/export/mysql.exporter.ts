@@ -25,13 +25,21 @@ export class MysqlExporter {
             const targetNode = tables.find(t => t.id === edge.target);
 
             if (sourceNode && targetNode) {
-                // Find potential FK column in source
-                // Naive Heuristic: Field marked as FK. 
-                // Enhanced: Field name contains target name or is 'target_id'.
-                const fkField = sourceNode.data.fields.find(f => f.isForeignKey);
-
-                if (fkField) {
-                    sql += this.createForeignKeySql(sourceNode, fkField, targetNode);
+                // Strategy 1: Use explicit field mappings if available
+                if (edge.data?.fieldMappings && edge.data.fieldMappings.length > 0) {
+                    edge.data.fieldMappings.forEach(mapping => {
+                        const sourceField = sourceNode.data.fields.find(f => f.name === mapping.sourceField);
+                        // We rely on mapping.targetField. If not found, we rely on the string value.
+                        if (sourceField) {
+                            sql += this.createForeignKeySql(sourceNode, sourceField, targetNode, mapping.targetField, edge.data?.constraints);
+                        }
+                    });
+                } else {
+                    // Strategy 2: Fallback to naive detection (legacy support)
+                    const fkField = sourceNode.data.fields.find(f => f.isForeignKey);
+                    if (fkField) {
+                        sql += this.createForeignKeySql(sourceNode, fkField, targetNode);
+                    }
                 }
             }
         });
@@ -46,23 +54,52 @@ export class MysqlExporter {
             let colSql = `  \`${field.name}\` ${field.type}`;
 
             if (!field.isNullable) colSql += ' NOT NULL';
-            if (field.isPrimaryKey) colSql += ' PRIMARY KEY';
+            // Primary key is handled at table level now
             if (field.isUnique && !field.isPrimaryKey) colSql += ' UNIQUE';
 
             return colSql;
         });
 
-        return `CREATE TABLE \`${tableName}\` (\n${columnDefs.join(',\n')}\n);\n\n`;
+        // Handle Primary Keys (Composite or Single)
+        const primaryKeys = table.data.fields
+            .filter(f => f.isPrimaryKey)
+            .map(f => `\`${f.name}\``);
+
+        const definitions = [...columnDefs];
+
+        if (primaryKeys.length > 0) {
+            definitions.push(`  PRIMARY KEY (${primaryKeys.join(', ')})`);
+        }
+
+        // Add explicit indexes
+        const indexes = table.data.fields
+            .filter(f => f.isIndex && !f.isPrimaryKey && !f.isUnique)
+            .map(f => `  INDEX \`idx_${tableName}_${f.name}\` (\`${f.name}\`)`);
+
+        const allDefinitions = [...definitions, ...indexes];
+
+        return `CREATE TABLE \`${tableName}\` (\n${allDefinitions.join(',\n')}\n);\n\n`;
     }
 
-    private static createForeignKeySql(source: DiagramNode, field: any, target: DiagramNode): string {
+    private static createForeignKeySql(
+        source: DiagramNode,
+        field: any,
+        target: DiagramNode,
+        targetCol?: string,
+        constraints?: { onDelete?: string; onUpdate?: string }
+    ): string {
         const sourceTable = source.data.label;
         const targetTable = target.data.label;
         const constraintName = `fk_${sourceTable}_${field.name}`;
 
-        // Assume target PK is the first PK field found, or 'id'
-        const targetPk = target.data.fields.find(f => f.isPrimaryKey)?.name || 'id';
+        // Assume target PK is the first PK field found, or 'id', if specific targetCol not provided
+        const targetPk = targetCol || target.data.fields.find(f => f.isPrimaryKey)?.name || 'id';
 
-        return `ALTER TABLE \`${sourceTable}\`\n  ADD CONSTRAINT \`${constraintName}\`\n  FOREIGN KEY (\`${field.name}\`)\n  REFERENCES \`${targetTable}\`(\`${targetPk}\`);\n\n`;
+        let sql = `ALTER TABLE \`${sourceTable}\`\n  ADD CONSTRAINT \`${constraintName}\`\n  FOREIGN KEY (\`${field.name}\`)\n  REFERENCES \`${targetTable}\`(\`${targetPk}\`)`;
+
+        if (constraints?.onDelete) sql += ` ON DELETE ${constraints.onDelete}`;
+        if (constraints?.onUpdate) sql += ` ON UPDATE ${constraints.onUpdate}`;
+
+        return sql + ';\n\n';
     }
 }

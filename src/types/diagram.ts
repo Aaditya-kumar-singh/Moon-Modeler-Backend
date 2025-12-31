@@ -6,6 +6,7 @@ export interface Field {
     isForeignKey?: boolean;
     isNullable?: boolean;
     isUnique?: boolean;
+    isIndex?: boolean;
     defaultValue?: string;
 }
 
@@ -27,6 +28,10 @@ export interface DiagramEdge {
     target: string;
     sourceHandle?: string;
     targetHandle?: string;
+    data?: {
+        fieldMappings?: { sourceField: string; targetField: string }[];
+        constraints?: { onDelete?: string; onUpdate?: string };
+    };
 }
 
 export interface DiagramContent {

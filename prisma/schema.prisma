@@ -42,6 +42,9 @@ model TeamToken {
   teamId String
   team   Team     @relation(fields: [teamId], references: [id])
   role   TeamRole @default(VIEWER)
+
+  @@index([userId])
+  @@index([teamId])
 }
 
 model Project {
@@ -57,6 +60,10 @@ model Project {
   versions  ProjectVersion[]
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([teamId])
+  @@index([type])
 }
 
 model ProjectVersion {
@@ -66,6 +73,8 @@ model ProjectVersion {
   content     Json
   description String?
   createdAt   DateTime @default(now())
+
+  @@index([projectId])
 }
 
 model AuditLog {
@@ -78,4 +87,7 @@ model AuditLog {
   
   // Optional relations usually avoided in audit logs to prevent preventing deletion, but can be added if strict integrity needed.
   // user User @relation(...) 
+
+  @@index([userId])
+  @@index([timestamp])
 }

@@ -1,6 +1,7 @@
 {
   "name": "moon-modeler-backend",
   "version": "1.0.0",
+  "author": "Aaditya Kumar",
   "scripts": {
     "dev": "next dev",
     "dev:socket": "tsx src/main.ts",

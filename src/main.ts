@@ -6,7 +6,7 @@ import { SocketHandler } from './gateway/socket.handler';
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
-const port = 3000;
+const port = parseInt(process.env.PORT || '3002', 10);
 
 // Initialize Next.js app
 const app = next({ dev, hostname, port });

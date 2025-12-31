@@ -14,8 +14,23 @@ export class ProjectsController {
     static async list(req: NextRequest) {
         try {
             const userId = getUserId(req);
-            const projects = await projectsService.getUserProjects(userId);
-            return ResponseUtil.success(projects);
+            const { searchParams } = new URL(req.url);
+
+            const page = parseInt(searchParams.get('page') || '1');
+            const limit = parseInt(searchParams.get('limit') || '10');
+            const type = searchParams.get('type') as 'MONGODB' | 'MYSQL' | undefined;
+            const sortBy = searchParams.get('sortBy') || 'updatedAt';
+            const sortOrder = (searchParams.get('sortOrder') || 'desc') as 'asc' | 'desc';
+
+            const result = await projectsService.getUserProjects(userId, {
+                page,
+                limit,
+                type,
+                sortBy,
+                sortOrder
+            });
+
+            return ResponseUtil.success(result);
         } catch (error) {
             return ResponseUtil.handleError(error);
         }
@@ -42,8 +57,9 @@ export class ProjectsController {
 
     static async getOne(req: NextRequest, { params }: { params: { id: string } }) {
         try {
-            const project = await projectsService.getObjectById(params.id);
-            if (!project) return ResponseUtil.error('Not found', 404, 'PROJECT_NOT_FOUND');
+            const userId = getUserId(req);
+            const project = await projectsService.getProjectById(params.id, userId);
+
             return ResponseUtil.success(project);
         } catch (error) {
             return ResponseUtil.handleError(error);
@@ -104,6 +120,28 @@ export class ProjectsController {
                 content: resultScript
             });
 
+        } catch (error) {
+            return ResponseUtil.handleError(error);
+        }
+    }
+    static async getVersions(req: NextRequest, { params }: { params: { id: string } }) {
+        try {
+            const { searchParams } = new URL(req.url);
+            const page = parseInt(searchParams.get('page') || '1');
+            const limit = parseInt(searchParams.get('limit') || '20');
+
+            const versions = await projectsService.getVersions(params.id, { page, limit });
+            return ResponseUtil.success(versions);
+        } catch (error) {
+            return ResponseUtil.handleError(error);
+        }
+    }
+
+    static async restoreVersion(req: NextRequest, { params }: { params: { id: string; versionId: string } }) {
+        try {
+            const userId = getUserId(req);
+            const restoredProject = await projectsService.restoreVersion(params.id, params.versionId, userId);
+            return ResponseUtil.success(restoredProject);
         } catch (error) {
             return ResponseUtil.handleError(error);
         }

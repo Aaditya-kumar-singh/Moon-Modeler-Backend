@@ -8,7 +8,20 @@ export class MongoIntrospector {
         try {
             await client.connect();
             const db = client.db();
-            const collections = await db.listCollections().toArray();
+
+            let collections;
+            try {
+                // Try to get full collection info (including validators)
+                collections = await db.listCollections().toArray();
+            } catch (e: any) {
+                // Fallback: If unauthorized to read system.views (validators), try name-only
+                if (e.code === 13 || e.codeName === 'Unauthorized') {
+                    console.warn('Unauthorized to list full collection info, falling back to names only.');
+                    collections = await db.listCollections({}, { nameOnly: true }).toArray();
+                } else {
+                    throw e;
+                }
+            }
 
             const nodes: DiagramNode[] = [];
             const edges: DiagramEdge[] = [];
@@ -16,30 +29,64 @@ export class MongoIntrospector {
 
             for (const col of collections) {
                 const name = col.name;
-                // Sampling 1 document to infer schema
-                const sample = await db.collection(name).findOne({});
+                const fields: any[] = [];
 
-                const fields = [];
-                // Always add _id
-                fields.push({
-                    id: crypto.randomUUID(),
-                    name: '_id',
-                    type: 'ObjectId',
-                    isPrimaryKey: true,
-                    isNullable: false
-                });
+                // 1. Try JSON Schema Validator
+                // @ts-ignore
+                const schema = col.options?.validator?.$jsonSchema;
 
-                if (sample) {
-                    for (const [key, value] of Object.entries(sample)) {
+                if (schema && schema.properties) {
+                    // Extract fields from Schema
+                    fields.push({
+                        id: crypto.randomUUID(),
+                        name: '_id',
+                        type: 'ObjectId',
+                        isPrimaryKey: true,
+                        isNullable: false
+                    });
+
+                    for (const [key, prop] of Object.entries(schema.properties)) {
                         if (key === '_id') continue;
-
+                        const p = prop as any;
                         fields.push({
                             id: crypto.randomUUID(),
                             name: key,
-                            type: this.mapType(value),
-                            isNullable: true,
+                            type: this.mapType(p.bsonType || p.type || 'string'),
+                            isNullable: !schema.required?.includes(key),
                             isPrimaryKey: false
                         });
+                    }
+                } else {
+                    // 2. Fallback: Sampling 1 document
+                    let sample;
+                    try {
+                        sample = await db.collection(name).findOne({});
+                    } catch (err) {
+                        console.warn(`Failed to sample document from ${name}`, err);
+                        // Continue effectively with sample = undefined, so we only get _id
+                    }
+
+                    // Always add _id
+                    fields.push({
+                        id: crypto.randomUUID(),
+                        name: '_id',
+                        type: 'ObjectId',
+                        isPrimaryKey: true,
+                        isNullable: false
+                    });
+
+                    if (sample) {
+                        for (const [key, value] of Object.entries(sample)) {
+                            if (key === '_id') continue;
+
+                            fields.push({
+                                id: crypto.randomUUID(),
+                                name: key,
+                                type: this.mapType(value),
+                                isNullable: true,
+                                isPrimaryKey: false
+                            });
+                        }
                     }
                 }
 

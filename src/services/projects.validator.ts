@@ -18,6 +18,7 @@ const MysqlFieldSchema = z.object({
     isForeignKey: z.boolean().optional(),
     isNullable: z.boolean().optional(),
     isUnique: z.boolean().optional(),
+    isIndex: z.boolean().optional(),
     defaultValue: z.string().optional()
 });
 
@@ -37,11 +38,7 @@ const MysqlNodeSchema = z.object({
     selected: z.boolean().optional(),
     positionAbsolute: z.object({ x: z.number(), y: z.number() }).optional(),
     dragging: z.boolean().optional(),
-}).refine((node) => {
-    // Rule: Single Primary Key (max 1)
-    const pkCount = node.data.fields.filter(f => f.isPrimaryKey).length;
-    return pkCount <= 1;
-}, { message: 'Only one primary key allowed per table' });
+});
 
 // --- MongoDB Schemas ---
 const MongoFieldSchema = z.object({
@@ -120,6 +117,19 @@ export const UpdateProjectSchema = z.object({
     name: z.string().min(1).max(100).optional(),
     content: z.any().optional(),
     version: z.number().optional(),
+});
+
+export const ImportSchema = z.object({
+    type: z.enum(['MYSQL', 'MONGODB']),
+    connectionString: z.string().min(1, 'Connection string is required'),
+});
+
+export const ExportSchema = z.object({
+    content: z.any() // We validate this strictly with ProjectsValidator.validateDiagram at runtime for better errors
+});
+
+export const VersionRestoreSchema = z.object({
+    versionId: z.string().uuid().optional(), // If passed in body, though typically path param
 });
 
 export class ProjectsValidator {
