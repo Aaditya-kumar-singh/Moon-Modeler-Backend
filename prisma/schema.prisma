@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
@@ -19,27 +19,28 @@ enum TeamRole {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  projects  Project[]
-  teams     TeamToken[] // Relation to Join Table
+  id       String    @id @default(auto()) @map("_id") @db.ObjectId
+  email    String    @unique
+  name     String?
+  password String?   // Hashed Password
+  projects Project[]
+  teams    TeamToken[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Team {
-  id        String      @id @default(cuid())
+  id        String      @id @default(auto()) @map("_id") @db.ObjectId
   name      String
-  members   TeamToken[] // Using explicit join table for flexibility
+  members   TeamToken[]
   projects  Project[]
 }
 
 model TeamToken {
-  id     String   @id @default(cuid())
-  userId String
+  id     String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId String   @db.ObjectId
   user   User     @relation(fields: [userId], references: [id])
-  teamId String
+  teamId String   @db.ObjectId
   team   Team     @relation(fields: [teamId], references: [id])
   role   TeamRole @default(VIEWER)
 
@@ -48,14 +49,14 @@ model TeamToken {
 }
 
 model Project {
-  id        String          @id @default(cuid())
+  id        String          @id @default(auto()) @map("_id") @db.ObjectId
   name      String
   type      DatabaseType    @default(MONGODB)
   content   Json?
-  version   Int             @default(0) // Optimistic Locking
-  userId    String?         // Optional if owned by Team
+  version   Int             @default(0)
+  userId    String?         @db.ObjectId
   user      User?           @relation(fields: [userId], references: [id])
-  teamId    String?
+  teamId    String?         @db.ObjectId
   team      Team?           @relation(fields: [teamId], references: [id])
   versions  ProjectVersion[]
   createdAt DateTime        @default(now())
@@ -63,12 +64,11 @@ model Project {
 
   @@index([userId])
   @@index([teamId])
-  @@index([type])
 }
 
 model ProjectVersion {
-  id          String   @id @default(cuid())
-  projectId   String
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  projectId   String   @db.ObjectId
   project     Project  @relation(fields: [projectId], references: [id])
   content     Json
   description String?
@@ -78,16 +78,12 @@ model ProjectVersion {
 }
 
 model AuditLog {
-  id         String   @id @default(cuid())
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
   userId     String
-  action     String   // e.g., PROJECT_DELETED, VERSION_RESTORED
-  resourceId String?  // Optional ID of related object
+  action     String
+  resourceId String?
   metadata   Json?
   timestamp  DateTime @default(now())
-  
-  // Optional relations usually avoided in audit logs to prevent preventing deletion, but can be added if strict integrity needed.
-  // user User @relation(...) 
 
   @@index([userId])
-  @@index([timestamp])
 }

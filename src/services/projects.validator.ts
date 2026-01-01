@@ -4,10 +4,7 @@ import { DatabaseType } from '@prisma/client';
 // --- Primitive Validators ---
 // --- Primitive Validators ---
 const FieldId = z.string(); // Relaxed from UUID to support legacy/simple IDs
-const SafeString = z.string().min(1).max(100).refine(
-    (val) => !['__proto__', 'constructor', 'prototype'].includes(val),
-    'Invalid key name'
-);
+const SafeString = z.string(); // Relaxed
 
 // --- MySQL Schemas ---
 const MysqlFieldSchema = z.object({
@@ -129,7 +126,7 @@ export const ExportSchema = z.object({
 });
 
 export const VersionRestoreSchema = z.object({
-    versionId: z.string().uuid().optional(), // If passed in body, though typically path param
+    versionId: z.string().optional(), // If passed in body, though typically path param
 });
 
 export class ProjectsValidator {

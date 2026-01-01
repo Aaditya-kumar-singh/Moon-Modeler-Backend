@@ -1,77 +1,104 @@
-import { Team, TeamToken, Prisma } from '@prisma/client';
-import { BaseHelper } from '@/common/helpers/base.helper';
-import { prisma } from '@/common/prisma.service';
-import { CreateTeamSchema, AddMemberSchema, TeamRoleType } from './teams.validator';
+import { mongoPrisma } from '@/common/mongo.service';
+import { ApiError } from '@/common/errors/api.error';
+import { TeamRole } from '@prisma/client-mongo';
 
-export class TeamsService extends BaseHelper<Team> {
-    constructor() {
-        super(prisma.team);
-    }
+export class TeamsService {
 
-    async createTeam(name: string, ownerId: string) {
-        // Validation
-        const validated = CreateTeamSchema.parse({ name });
+    async createTeam(userId: string, name: string) {
+        // Run sequentially instead of transaction to support non-ReplicaSet MongoDB
+        const team = await mongoPrisma.team.create({
+            data: { name }
+        });
 
-        return prisma.$transaction(async (tx) => {
-            // 1. Create Team
-            const team = await tx.team.create({
-                data: {
-                    name: validated.name as string,
-                }
-            });
-
-            // 2. Add Owner
-            await tx.teamToken.create({
+        try {
+            await mongoPrisma.teamToken.create({
                 data: {
                     teamId: team.id,
-                    userId: ownerId,
+                    userId: userId,
                     role: 'OWNER'
                 }
             });
+        } catch (error) {
+            // Rollback (manual)
+            await mongoPrisma.team.delete({ where: { id: team.id } });
+            throw error;
+        }
 
-            return team;
-        });
+        return team;
     }
 
-    async addMember(teamId: string, email: string, role: any, actorId: string) {
-        const validated = AddMemberSchema.parse({ email, role });
+    async getUserTeams(userId: string) {
+        const tokens = await mongoPrisma.teamToken.findMany({
+            where: { userId },
+            include: { team: true }
+        });
 
-        return prisma.$transaction(async (tx) => {
-            // 1. Check Permissions
-            const actorToken = await tx.teamToken.findFirst({
-                where: { teamId, userId: actorId }
-            });
+        // Enrich with member count maybe?
+        return tokens.map(token => ({
+            ...token.team,
+            role: token.role
+        }));
+    }
 
-            if (!actorToken) throw new Error('FORBIDDEN: You are not a member of this team');
+    async getTeamMembers(teamId: string, userId: string) {
+        // Verify user is part of the team
+        const membership = await mongoPrisma.teamToken.findFirst({
+            where: { teamId, userId }
+        });
+        if (!membership) throw ApiError.forbidden('Not a member of this team');
 
-            // Use the Helper to enforce RBAC
-            const { PermissionHelper } = await import('@/common/helpers/permission.helper');
-            PermissionHelper.check(actorToken.role as TeamRoleType, 'ADD_MEMBER');
-
-            // 2. Find User by Email
-            const user = await tx.user.findUnique({ where: { email: validated.email } });
-            if (!user) throw new Error('User not found');
-
-            // 3. Add to Team
-            const teamToken = await tx.teamToken.create({
-                data: {
-                    teamId,
-                    userId: user.id,
-                    role: validated.role
+        const members = await mongoPrisma.teamToken.findMany({
+            where: { teamId },
+            include: {
+                user: {
+                    select: { id: true, name: true, email: true }
                 }
-            });
+            }
+        });
 
-            // 4. Audit log (within same transaction)
-            await tx.auditLog.create({
-                data: {
-                    userId: actorId,
-                    action: 'MEMBER_ADDED',
-                    resourceId: teamId,
-                    metadata: { newMemberId: user.id, role: validated.role } as any,
-                }
-            });
+        return members.map(m => ({
+            id: m.userId,
+            name: m.user?.name || 'Unknown',
+            email: m.user?.email || 'No Email',
+            role: m.role
+        }));
+    }
 
-            return teamToken;
+    async inviteMember(teamId: string, inviterId: string, email: string, role: TeamRole = 'VIEWER') {
+        // 1. Verify inviter has permission (OWNER or EDITOR)
+        const inviter = await mongoPrisma.teamToken.findFirst({
+            where: { teamId, userId: inviterId }
+        });
+
+        if (!inviter || (inviter.role !== 'OWNER' && inviter.role !== 'EDITOR')) {
+            throw ApiError.forbidden('Insufficient permissions to invite members');
+        }
+
+        // 2. Find User by Email
+        const userToAdd = await mongoPrisma.user.findUnique({
+            where: { email }
+        });
+
+        if (!userToAdd) {
+            throw ApiError.notFound('User', email);
+            // In a real app, we'd create a pending invitation record here if user doesn't exist.
+        }
+
+        // 3. Check if already member
+        const existing = await mongoPrisma.teamToken.findFirst({
+            where: { teamId, userId: userToAdd.id }
+        });
+        if (existing) {
+            throw ApiError.conflict('User is already a member of this team');
+        }
+
+        // 4. Add Member
+        return mongoPrisma.teamToken.create({
+            data: {
+                teamId,
+                userId: userToAdd.id,
+                role
+            }
         });
     }
 }

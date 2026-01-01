@@ -1,6 +1,7 @@
-import { Project, Prisma } from '@prisma/client';
+import { Project, Prisma } from '@prisma/client-postgres';
 import { BaseHelper } from '@/common/helpers/base.helper';
-import { prisma } from '@/common/prisma.service';
+import { postgresPrisma } from '@/common/postgres.service';
+import { mongoPrisma } from '@/common/mongo.service';
 import { CreateProjectSchema, ProjectsValidator } from './projects.validator';
 import crypto from 'crypto';
 import { logSafe } from '@/common/lib/logger';
@@ -8,43 +9,32 @@ import { ApiError } from '@/common/errors/api.error';
 
 export class ProjectsService extends BaseHelper<Project> {
     constructor() {
-        super(prisma.project);
+        super(postgresPrisma.project);
     }
 
     async createProject(userId: string, data: any) {
         const validated = CreateProjectSchema.parse(data);
 
-        return prisma.$transaction(async (tx) => {
-            // DEV HAXX: Ensure mock user exists so FK doesn't fail
-            if (userId === 'mock-user-id') {
-                await tx.user.upsert({
-                    where: { id: userId },
-                    create: { id: userId, email: 'mock@example.com', name: 'Mock User' },
-                    update: {},
-                });
+        // Create in Postgres
+        const project = await postgresPrisma.project.create({
+            data: {
+                ...validated,
+                userId,
+                content: { nodes: [], edges: [] },
             }
-
-            // 1. Create Project
-            const project = await tx.project.create({
-                data: {
-                    ...validated,
-                    userId,
-                    content: { nodes: [], edges: [] }, // Initial empty state
-                }
-            });
-
-            // 2. Audit log (within same transaction)
-            await tx.auditLog.create({
-                data: {
-                    userId,
-                    action: 'PROJECT_CREATED',
-                    resourceId: project.id,
-                    metadata: { name: project.name, type: project.type } as any,
-                }
-            });
-
-            return project;
         });
+
+        // Audit log (Mongo)
+        await mongoPrisma.auditLog.create({
+            data: {
+                userId,
+                action: 'PROJECT_CREATED',
+                resourceId: project.id,
+                metadata: { name: project.name, type: project.type } as any,
+            }
+        });
+
+        return project;
     }
 
     async getUserProjects(userId: string, options: {
@@ -53,19 +43,39 @@ export class ProjectsService extends BaseHelper<Project> {
         type?: 'MONGODB' | 'MYSQL';
         sortBy?: string;
         sortOrder?: 'asc' | 'desc';
+        teamId?: string;
     } = {}) {
         const page = options.page || 1;
         const limit = options.limit || 10;
         const skip = (page - 1) * limit;
         const orderBy = { [options.sortBy || 'updatedAt']: options.sortOrder || 'desc' };
 
-        const where: Prisma.ProjectWhereInput = { userId };
-        if (options.type) {
-            where.type = options.type;
+        let where: Prisma.ProjectWhereInput = {};
+
+        if (options.teamId) {
+            const isMember = await mongoPrisma.teamToken.findFirst({
+                where: { teamId: options.teamId, userId }
+            });
+
+            if (!isMember) {
+                return { projects: [], total: 0, page, limit, pages: 0 };
+            }
+
+            where = { teamId: options.teamId };
+        } else {
+            // Personal & Shared
+            where = {
+                OR: [
+                    { userId, teamId: null },
+                    { collaborators: { some: { userId } } }
+                ]
+            };
         }
 
+        if (options.type) where.type = options.type;
+
         const [total, projects] = await Promise.all([
-            prisma.project.count({ where }),
+            postgresPrisma.project.count({ where }),
             this.getAllObjects({
                 where,
                 orderBy,
@@ -75,70 +85,101 @@ export class ProjectsService extends BaseHelper<Project> {
                     id: true,
                     name: true,
                     type: true,
-                    description: true,
                     userId: true,
                     teamId: true,
                     createdAt: true,
                     updatedAt: true,
                     version: true,
-                    team: true,
-                    // content field is EXPLICITLY OMITTED to optimize performance
                 },
             })
         ]);
 
         return {
             projects,
-            meta: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-            }
+            meta: { total, page, limit, totalPages: Math.ceil(total / limit) }
         };
     }
 
     async getProjectById(id: string, userId: string) {
-        const project = await this.getObjectById(id);
+        const project = await postgresPrisma.project.findUnique({
+            where: { id },
+            include: { collaborators: true }
+        });
         if (!project) throw ApiError.notFound('Project', id);
 
-        // Access Control: Check ownership or Team membership
-        if (project.userId !== userId && !project.teamId) {
-            throw ApiError.forbidden('You do not have permission to view this project.');
+        let currentUserRole = 'VIEWER';
+        let hasAccess = false;
+
+        // Check Owner
+        if (project.userId === userId) {
+            currentUserRole = 'OWNER';
+            hasAccess = true;
         }
 
-        return project;
+        // Check Collaborator
+        if (!hasAccess) {
+            const collaborator = project.collaborators.find(c => c.userId === userId);
+            if (collaborator) {
+                currentUserRole = collaborator.role;
+                hasAccess = true;
+            }
+        }
+
+        // Check Team
+        if (!hasAccess && project.teamId) {
+            const member = await mongoPrisma.teamToken.findFirst({
+                where: { teamId: project.teamId, userId }
+            });
+            if (member) {
+                currentUserRole = (member.role === 'OWNER' || member.role === 'EDITOR') ? 'EDITOR' : 'VIEWER';
+                hasAccess = true;
+            }
+        }
+
+        if (!hasAccess) throw ApiError.forbidden('Access denied');
+
+        return { ...project, currentUserRole };
     }
 
     async saveDiagram(projectId: string, content: any, userId: string, expectedVersion?: number, forceSnapshot: boolean = false) {
-        // 1. Validate JSON
         ProjectsValidator.validateDiagram(content);
-
-        // 2. Hash New Content
         const newHash = this.createHash(content);
 
-        // 3. Fetch current state (No Transaction)
-        // Forced cast to ensure 'version' is recognized if IDE is stale
-        const current = await prisma.project.findUnique({ where: { id: projectId } }) as Project;
+        // Fetch current
+        const current = await postgresPrisma.project.findUnique({
+            where: { id: projectId },
+            include: { collaborators: true }
+        }) as any;
 
         if (!current) throw ApiError.notFound('Project', projectId);
 
-        // Optimistic Locking Check
+        // Optimistic Locking
         if (expectedVersion !== undefined && (current as any).version !== expectedVersion) {
-            throw ApiError.conflict('Project has been modified by another user. Reload required.');
+            throw ApiError.conflict('Version conflict');
         }
 
         // RBAC Check
-        if (current.userId !== userId && !current.teamId) {
-            // Allow if team member... (todo)
+        if (current.userId !== userId) {
+            const collaborator = current.collaborators?.find((c: any) => c.userId === userId);
+            const isEditor = collaborator && collaborator.role === 'EDITOR';
+
+            if (!isEditor) {
+                if (current.teamId) {
+                    const member = await mongoPrisma.teamToken.findFirst({
+                        where: { teamId: current.teamId, userId }
+                    });
+                    if (!member || member.role === 'VIEWER') throw ApiError.forbidden('Read only');
+                } else {
+                    throw ApiError.forbidden('Read only');
+                }
+            }
         }
 
-        // 4. Auto-Versioning Logic (Smart Throttling)
+        // Auto-Versioning
         const currentHash = this.createHash(current.content);
 
         if (currentHash !== newHash || forceSnapshot) {
-            // Check last version time
-            const lastVersion = await prisma.projectVersion.findFirst({
+            const lastVersion = await postgresPrisma.projectVersion.findFirst({
                 where: { projectId },
                 orderBy: { createdAt: 'desc' }
             });
@@ -147,23 +188,23 @@ export class ProjectsService extends BaseHelper<Project> {
             const shouldSaveVersion = forceSnapshot || !lastVersion || (Date.now() - lastVersion.createdAt.getTime() > FIVE_MINUTES);
 
             if (shouldSaveVersion) {
-                await prisma.projectVersion.create({
+                await postgresPrisma.projectVersion.create({
                     data: {
                         projectId,
-                        content: current.content ?? {}, // Saving the OLD state as backup
-                        description: forceSnapshot ? 'Backup before Restore' : 'Auto-save (Smart)',
+                        content: current.content ?? {},
+                        description: forceSnapshot ? 'Manual Backup' : 'Auto-save',
                     },
                 });
             }
         }
 
-        // 5. Update the live project with Version Increment
-        return prisma.project.update({
+        // Update Project
+        return postgresPrisma.project.update({
             where: { id: projectId },
             data: {
                 content,
-                // @ts-ignore: Version field exists in DB but types might be stale
-                version: { increment: 1 } // ATOMIC INCREMENT
+                // @ts-ignore
+                version: { increment: 1 }
             }
         });
     }
@@ -174,8 +215,8 @@ export class ProjectsService extends BaseHelper<Project> {
         const skip = (page - 1) * limit;
 
         const [total, versions] = await Promise.all([
-            prisma.projectVersion.count({ where: { projectId } }),
-            prisma.projectVersion.findMany({
+            postgresPrisma.projectVersion.count({ where: { projectId } }),
+            postgresPrisma.projectVersion.findMany({
                 where: { projectId },
                 orderBy: { createdAt: 'desc' },
                 skip,
@@ -195,7 +236,7 @@ export class ProjectsService extends BaseHelper<Project> {
     }
 
     async restoreVersion(projectId: string, versionId: string, userId: string) {
-        const version = await prisma.projectVersion.findUnique({
+        const version = await postgresPrisma.projectVersion.findUnique({
             where: { id: versionId },
         });
         if (!version) throw ApiError.notFound('Version', versionId);
@@ -219,6 +260,102 @@ export class ProjectsService extends BaseHelper<Project> {
 
     private createHash(data: any): string {
         return crypto.createHash('sha256').update(JSON.stringify(data || {})).digest('hex');
+    }
+
+    // --- Collaboration Methods ---
+
+    async shareProject(projectId: string, email: string, role: string, inviterId: string) {
+        // 1. Verify project permissions
+        const project = await postgresPrisma.project.findUnique({
+            where: { id: projectId },
+            include: { collaborators: true }
+        });
+        if (!project) throw ApiError.notFound('Project');
+
+        const isOwner = project.userId === inviterId;
+        const isEditor = project.collaborators.some(c => c.userId === inviterId && c.role === 'EDITOR');
+
+        // Only Owner or Editor can invite others
+        if (!isOwner && !isEditor) {
+            throw ApiError.forbidden('Insufficient permissions to share this project');
+        }
+
+        // 2. Lookup User
+        const userToInvite = await mongoPrisma.user.findUnique({ where: { email } });
+        if (!userToInvite) {
+            throw ApiError.notFound('User not found in system. Please ask them to register first.');
+        }
+
+        // 3. Add/Update Collaborator
+        const existing = await postgresPrisma.projectCollaborator.findUnique({
+            where: {
+                projectId_userId: { projectId, userId: userToInvite.id }
+            }
+        });
+
+        if (existing) {
+            return postgresPrisma.projectCollaborator.update({
+                where: { id: existing.id },
+                data: { role }
+            });
+        }
+
+        return postgresPrisma.projectCollaborator.create({
+            data: {
+                projectId,
+                userId: userToInvite.id,
+                role
+            }
+        });
+    }
+
+    async getProjectCollaborators(projectId: string) {
+        const collaborators = await postgresPrisma.projectCollaborator.findMany({
+            where: { projectId }
+        });
+
+        if (collaborators.length === 0) {
+            return [];
+        }
+
+        const userIds = collaborators.map(c => c.userId);
+
+        // Optimized: Fetch all users in one query
+        const users = await mongoPrisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, name: true, email: true }
+        });
+
+        // Create a map for O(1) lookup
+        const userMap = new Map(users.map(u => [u.id, u]));
+
+        const enriched = collaborators.map((c) => {
+            const user = userMap.get(c.userId);
+            return {
+                ...c,
+                user: user || { name: 'Unknown', email: 'Unknown' }
+            };
+        });
+
+        return enriched;
+    }
+
+    async removeCollaborator(projectId: string, userIdToRemove: string, requesterId: string) {
+        // Check permissions (Only Owner can remove?)
+        const project = await postgresPrisma.project.findUnique({ where: { id: projectId } });
+        if (!project) throw ApiError.notFound('Project');
+
+        if (project.userId !== requesterId && userIdToRemove !== requesterId) {
+            // Allow user to remove THEMSELVES (leave project), otherwise only Owner
+            throw ApiError.forbidden('Only the project owner can remove collaborators');
+        }
+
+        return postgresPrisma.projectCollaborator.deleteMany({
+            where: {
+                projectId,
+                userId: userIdToRemove
+            }
+        });
     }
 }
 

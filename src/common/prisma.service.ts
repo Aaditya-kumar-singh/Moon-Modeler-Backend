@@ -1,15 +1,14 @@
-import { PrismaClient } from '@prisma/client';
+/**
+ * DEPRECATED: This file is no longer used.
+ * 
+ * The application now uses dual databases:
+ * - MongoDB: Use `mongoPrisma` from './mongo.service'
+ * - PostgreSQL: Use `postgresPrisma` from './postgres.service'
+ * 
+ * This file is kept for backward compatibility but should not be imported.
+ */
 
-const prismaClientSingleton = () => {
-    return new PrismaClient();
-};
-
-type PrismaClientSingleton = ReturnType<typeof prismaClientSingleton>;
-
-const globalForPrisma = globalThis as unknown as {
-    prisma: PrismaClientSingleton | undefined;
-};
-
-export const prisma = globalForPrisma.prisma ?? prismaClientSingleton();
-
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+// Re-export mongoPrisma as default for any legacy code
+export { mongoPrisma as prisma } from './mongo.service';
+export { mongoPrisma } from './mongo.service';
+export { postgresPrisma } from './postgres.service';

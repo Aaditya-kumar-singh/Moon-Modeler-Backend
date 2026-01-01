@@ -1,4 +1,4 @@
-import { prisma } from '@/common/prisma.service';
+import { mongoPrisma } from '@/common/mongo.service';
 import { logSafe } from '@/common/lib/logger';
 
 /**
@@ -60,7 +60,7 @@ export class AuditLogService {
                 ? this.sanitizeMetadata(entry.metadata)
                 : null;
 
-            await prisma.auditLog.create({
+            await mongoPrisma.auditLog.create({
                 data: {
                     userId: entry.userId,
                     action: entry.action,
@@ -89,7 +89,7 @@ export class AuditLogService {
      * Query audit logs for a specific user
      */
     static async getUserAuditLogs(userId: string, limit: number = 100) {
-        return prisma.auditLog.findMany({
+        return mongoPrisma.auditLog.findMany({
             where: { userId },
             orderBy: { timestamp: 'desc' },
             take: limit,
@@ -100,7 +100,7 @@ export class AuditLogService {
      * Query audit logs for a specific resource
      */
     static async getResourceAuditLogs(resourceId: string, limit: number = 100) {
-        return prisma.auditLog.findMany({
+        return mongoPrisma.auditLog.findMany({
             where: { resourceId },
             orderBy: { timestamp: 'desc' },
             take: limit,
@@ -111,7 +111,7 @@ export class AuditLogService {
      * Query audit logs by action type
      */
     static async getAuditLogsByAction(action: AuditAction, limit: number = 100) {
-        return prisma.auditLog.findMany({
+        return mongoPrisma.auditLog.findMany({
             where: { action },
             orderBy: { timestamp: 'desc' },
             take: limit,
@@ -122,7 +122,7 @@ export class AuditLogService {
      * Get audit logs within a time range
      */
     static async getAuditLogsInRange(startDate: Date, endDate: Date, limit: number = 1000) {
-        return prisma.auditLog.findMany({
+        return mongoPrisma.auditLog.findMany({
             where: {
                 timestamp: {
                     gte: startDate,

@@ -7,7 +7,19 @@ import { MongoExporter } from '@/services/export/mongo.exporter';
 import { DiagramContent } from '@/types/diagram';
 
 // Mock Auth until we implement NextAuth
-const getUserId = (req: NextRequest) => 'mock-user-id';
+// Auth helper
+const getUserId = (req: NextRequest) => {
+    const authHeader = req.headers.get('authorization');
+    if (!authHeader) return 'mock-user-id';
+
+    try {
+        const token = authHeader.split(' ')[1];
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        return payload.userId;
+    } catch (e) {
+        return 'mock-user-id';
+    }
+};
 
 export class ProjectsController {
 
@@ -21,13 +33,15 @@ export class ProjectsController {
             const type = searchParams.get('type') as 'MONGODB' | 'MYSQL' | undefined;
             const sortBy = searchParams.get('sortBy') || 'updatedAt';
             const sortOrder = (searchParams.get('sortOrder') || 'desc') as 'asc' | 'desc';
+            const teamId = searchParams.get('teamId') || undefined;
 
             const result = await projectsService.getUserProjects(userId, {
                 page,
                 limit,
                 type,
                 sortBy,
-                sortOrder
+                sortOrder,
+                teamId
             });
 
             return ResponseUtil.success(result);
@@ -142,6 +156,43 @@ export class ProjectsController {
             const userId = getUserId(req);
             const restoredProject = await projectsService.restoreVersion(params.id, params.versionId, userId);
             return ResponseUtil.success(restoredProject);
+        } catch (error) {
+            return ResponseUtil.handleError(error);
+        }
+    }
+
+    // --- Collaboration ---
+
+    static async share(req: NextRequest, { params }: { params: { id: string } }) {
+        try {
+            const userId = getUserId(req);
+            const body = await req.json();
+            const { email, role } = z.object({
+                email: z.string().email(),
+                role: z.enum(['EDITOR', 'VIEWER'])
+            }).parse(body);
+
+            const result = await projectsService.shareProject(params.id, email, role, userId);
+            return ResponseUtil.success(result);
+        } catch (error) {
+            return ResponseUtil.handleError(error);
+        }
+    }
+
+    static async getCollaborators(req: NextRequest, { params }: { params: { id: string } }) {
+        try {
+            const collaborators = await projectsService.getProjectCollaborators(params.id);
+            return ResponseUtil.success(collaborators);
+        } catch (error) {
+            return ResponseUtil.handleError(error);
+        }
+    }
+
+    static async removeCollaborator(req: NextRequest, { params }: { params: { id: string; userId: string } }) {
+        try {
+            const requesterId = getUserId(req);
+            await projectsService.removeCollaborator(params.id, params.userId, requesterId);
+            return ResponseUtil.success({ message: 'Collaborator removed' });
         } catch (error) {
             return ResponseUtil.handleError(error);
         }

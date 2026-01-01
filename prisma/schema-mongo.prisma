@@ -1,0 +1,55 @@
+// MongoDB Schema - User Authentication & Teams
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@prisma/client-mongo"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum TeamRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id        String      @id @default(auto()) @map("_id") @db.ObjectId
+  email     String      @unique
+  name      String?
+  password  String?     // Hashed Password
+  teams     TeamToken[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model Team {
+  id      String      @id @default(auto()) @map("_id") @db.ObjectId
+  name    String
+  members TeamToken[]
+}
+
+model TeamToken {
+  id     String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId String   @db.ObjectId
+  user   User     @relation(fields: [userId], references: [id])
+  teamId String   @db.ObjectId
+  team   Team     @relation(fields: [teamId], references: [id])
+  role   TeamRole @default(VIEWER)
+
+  @@index([userId])
+  @@index([teamId])
+}
+
+model AuditLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String
+  action     String
+  resourceId String?
+  metadata   Json?
+  timestamp  DateTime @default(now())
+
+  @@index([userId])
+}
