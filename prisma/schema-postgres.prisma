@@ -26,6 +26,8 @@ model Project {
   createdAt DateTime         @default(now())
   updatedAt DateTime         @updatedAt
 
+  @@index([userId, updatedAt])
+  @@index([updatedAt])
   @@index([userId])
   @@index([teamId])
   collaborators ProjectCollaborator[]

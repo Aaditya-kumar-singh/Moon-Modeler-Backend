@@ -52,7 +52,7 @@ class InMemoryIdempotencyStore implements IdempotencyStore {
 
 /**
  * Redis Idempotency Store (for production)
- * Requires Redis/Upstash KV
+ * Adapter for ioredis
  */
 class RedisIdempotencyStore implements IdempotencyStore {
     private redis: any; // Redis client
@@ -73,6 +73,35 @@ class RedisIdempotencyStore implements IdempotencyStore {
     async set(key: string, value: string, ttlSeconds: number): Promise<void> {
         try {
             await this.redis.setex(`idempotency:${key}`, ttlSeconds, value);
+        } catch (error) {
+            logSafe('error', 'IDEMPOTENCY_SET_FAILED', { key, error });
+        }
+    }
+}
+
+/**
+ * Upstash Idempotency Store (for production)
+ * Adapter for @upstash/redis
+ */
+class UpstashIdempotencyStore implements IdempotencyStore {
+    private redis: any;
+
+    constructor(redisClient: any) {
+        this.redis = redisClient;
+    }
+
+    async get(key: string): Promise<string | null> {
+        try {
+            return await this.redis.get(`idempotency:${key}`);
+        } catch (error) {
+            logSafe('error', 'IDEMPOTENCY_GET_FAILED', { key, error });
+            return null;
+        }
+    }
+
+    async set(key: string, value: string, ttlSeconds: number): Promise<void> {
+        try {
+            await this.redis.set(`idempotency:${key}`, value, { ex: ttlSeconds });
         } catch (error) {
             logSafe('error', 'IDEMPOTENCY_SET_FAILED', { key, error });
         }
@@ -106,8 +135,13 @@ export class IdempotencyService {
      */
     static initialize(redisClient?: any) {
         if (redisClient) {
-            this.store = new RedisIdempotencyStore(redisClient);
-            logSafe('info', 'IDEMPOTENCY_INITIALIZED', { store: 'redis' });
+            if (typeof redisClient.setex === 'function') {
+                this.store = new RedisIdempotencyStore(redisClient);
+                logSafe('info', 'IDEMPOTENCY_INITIALIZED', { store: 'ioredis' });
+            } else {
+                this.store = new UpstashIdempotencyStore(redisClient);
+                logSafe('info', 'IDEMPOTENCY_INITIALIZED', { store: 'upstash-http' });
+            }
         } else {
             const memoryStore = new InMemoryIdempotencyStore();
             memoryStore.startCleanup();

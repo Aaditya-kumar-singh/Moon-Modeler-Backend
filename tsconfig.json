@@ -24,6 +24,12 @@
         "paths": {
             "@/*": [
                 "./src/*"
+            ],
+            "@prisma/client-postgres": [
+                "./node_modules/@prisma/client-postgres"
+            ],
+            "@prisma/client-mongo": [
+                "./node_modules/@prisma/client-mongo"
             ]
         }
     },

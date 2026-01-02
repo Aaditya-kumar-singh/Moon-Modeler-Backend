@@ -10,14 +10,16 @@ import { DiagramContent } from '@/types/diagram';
 // Auth helper
 const getUserId = (req: NextRequest) => {
     const authHeader = req.headers.get('authorization');
-    if (!authHeader) return 'mock-user-id';
+    if (!authHeader) {
+        throw new Error('UNAUTHORIZED: No token provided');
+    }
 
     try {
         const token = authHeader.split(' ')[1];
         const payload = JSON.parse(atob(token.split('.')[1]));
         return payload.userId;
     } catch (e) {
-        return 'mock-user-id';
+        throw new Error('UNAUTHORIZED: Invalid token');
     }
 };
 
@@ -61,9 +63,6 @@ export class ProjectsController {
                 const newProject = await projectsService.createProject(userId, body);
                 return ResponseUtil.success(newProject, 201);
             } catch (error) {
-                if (error instanceof z.ZodError) {
-                    return ResponseUtil.error(JSON.stringify(error.issues), 400, 'VALIDATION_ERROR');
-                }
                 return ResponseUtil.handleError(error);
             }
         });
@@ -81,27 +80,27 @@ export class ProjectsController {
     }
 
     static async update(req: NextRequest, { params }: { params: { id: string } }) {
-        try {
-            const userId = getUserId(req);
-            const body = await req.json();
+        const { IdempotencyService } = await import('@/common/middleware/idempotency.service');
 
-            // Assuming body has content. Using SaveDiagram for complex logic
-            if (body.content) {
-                // version is optional for strictly safe updates
-                const updated = await projectsService.saveDiagram(params.id, body.content, userId, body.version);
+        return IdempotencyService.execute(req, async () => {
+            try {
+                const userId = getUserId(req);
+                const body = await req.json();
+
+                // Assuming body has content. Using SaveDiagram for complex logic
+                if (body.content) {
+                    // version is optional for strictly safe updates
+                    const updated = await projectsService.saveDiagram(params.id, body.content, userId, body.version);
+                    return ResponseUtil.success(updated);
+                }
+                // Fallback for simple name update
+                const updated = await projectsService.updateObjectById(params.id, body);
                 return ResponseUtil.success(updated);
+            } catch (error) {
+                console.error('[ProjectsController.update] Error:', error);
+                return ResponseUtil.handleError(error);
             }
-            // Fallback for simple name update
-            const updated = await projectsService.updateObjectById(params.id, body);
-            return ResponseUtil.success(updated);
-
-        } catch (error) {
-            console.error('[ProjectsController.update] Error:', error);
-            if (error instanceof z.ZodError) {
-                return ResponseUtil.error(JSON.stringify(error.issues), 400, 'VALIDATION_ERROR');
-            }
-            return ResponseUtil.handleError(error);
-        }
+        });
     }
 
     static async export(req: NextRequest, { params }: { params: { id: string } }) {

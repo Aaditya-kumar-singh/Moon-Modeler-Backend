@@ -49,7 +49,7 @@ export class AuthController {
             if (error instanceof z.ZodError) {
                 return Response.json({ error: 'Validation Error', details: error.issues }, { status: 400 });
             }
-            return Response.json({ error: error.message || 'Internal Server Error' }, { status: error.status || 500 });
+            return ResponseUtil.handleError(error);
         }
     }
 
@@ -64,7 +64,11 @@ export class AuthController {
             }
 
             const valid = await bcrypt.compare(password, user.password);
+            console.log(`[LOGIN DEBUG] Checking password for ${email}`);
+            console.log(`[LOGIN DEBUG] Match Result: ${valid}`);
+
             if (!valid) {
+                console.log(`[LOGIN ERROR] Password mismatch for ${email}`);
                 throw ApiError.unauthorized('Invalid email or password');
             }
 
@@ -79,7 +83,7 @@ export class AuthController {
             if (error instanceof z.ZodError) {
                 return Response.json({ error: 'Validation Error', details: error.issues }, { status: 400 });
             }
-            return Response.json({ error: error.message || 'Internal Server Error' }, { status: error.status || 500 });
+            return ResponseUtil.handleError(error);
         }
     }
 }

@@ -8,13 +8,7 @@ export class ImportController {
     static async execute(req: NextRequest) {
         try {
             const body = await req.json();
-            const validation = ImportSchema.safeParse(body);
-
-            if (!validation.success) {
-                return ResponseUtil.error(JSON.stringify(validation.error.issues), 400, 'VALIDATION_ERROR');
-            }
-
-            const { type, connectionString } = validation.data;
+            const { type, connectionString } = ImportSchema.parse(body); // Throws ZodError on failure
             let content;
 
             // TODO: In production, offload this to a Job Queue (BullMQ) to prevent timeouts

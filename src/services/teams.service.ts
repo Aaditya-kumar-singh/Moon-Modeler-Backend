@@ -34,10 +34,12 @@ export class TeamsService {
         });
 
         // Enrich with member count maybe?
-        return tokens.map(token => ({
-            ...token.team,
-            role: token.role
-        }));
+        return tokens
+            .filter(token => token.team !== null) // Filter out broken relationships
+            .map(token => ({
+                ...token.team!,
+                role: token.role
+            }));
     }
 
     async getTeamMembers(teamId: string, userId: string) {

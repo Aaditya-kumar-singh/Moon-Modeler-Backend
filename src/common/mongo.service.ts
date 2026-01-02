@@ -1,6 +1,7 @@
 /**
  * MongoDB Prisma Client
  * Used for: Users, Teams, Authentication, Audit Logs
+ * (Trigger Rebuild)
  */
 import { PrismaClient } from '@prisma/client-mongo';
 

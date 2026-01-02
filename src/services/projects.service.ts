@@ -6,6 +6,7 @@ import { CreateProjectSchema, ProjectsValidator } from './projects.validator';
 import crypto from 'crypto';
 import { logSafe } from '@/common/lib/logger';
 import { ApiError } from '@/common/errors/api.error';
+import { CacheService } from '@/common/services/cache.service';
 
 export class ProjectsService extends BaseHelper<Project> {
     constructor() {
@@ -34,6 +35,10 @@ export class ProjectsService extends BaseHelper<Project> {
             }
         });
 
+
+        // Invalidate Cache for this user
+        await CacheService.invalidatePattern(`projects:${userId}:*`);
+
         return project;
     }
 
@@ -47,6 +52,12 @@ export class ProjectsService extends BaseHelper<Project> {
     } = {}) {
         const page = options.page || 1;
         const limit = options.limit || 10;
+
+        // Cache Key: projects:userId:page:limit:type:sort...
+        const cacheKey = `projects:${userId}:${page}:${limit}:${options.type || 'all'}:${options.teamId || 'personal'}`;
+        const cached = await CacheService.get(cacheKey);
+        if (cached) return cached;
+
         const skip = (page - 1) * limit;
         const orderBy = { [options.sortBy || 'updatedAt']: options.sortOrder || 'desc' };
 
@@ -94,10 +105,17 @@ export class ProjectsService extends BaseHelper<Project> {
             })
         ]);
 
-        return {
+        const result = {
             projects,
-            meta: { total, page, limit, totalPages: Math.ceil(total / limit) }
+            total: total || 0,
+            page,
+            limit,
+            pages: Math.ceil((total || 0) / limit)
         };
+
+        // Set Cache (5 minutes)
+        await CacheService.set(cacheKey, result, 300);
+        return result;
     }
 
     async getProjectById(id: string, userId: string) {
@@ -199,7 +217,7 @@ export class ProjectsService extends BaseHelper<Project> {
         }
 
         // Update Project
-        return postgresPrisma.project.update({
+        const updated = await postgresPrisma.project.update({
             where: { id: projectId },
             data: {
                 content,
@@ -207,6 +225,10 @@ export class ProjectsService extends BaseHelper<Project> {
                 version: { increment: 1 }
             }
         });
+
+        // Invalidate Cache
+        await CacheService.invalidatePattern(`projects:${userId}:*`);
+        return updated;
     }
 
     async getVersions(projectId: string, options: { page?: number; limit?: number } = {}) {
@@ -227,10 +249,10 @@ export class ProjectsService extends BaseHelper<Project> {
         return {
             versions,
             meta: {
-                total,
+                total: total || 0,
                 page,
                 limit,
-                totalPages: Math.ceil(total / limit),
+                totalPages: Math.ceil((total || 0) / limit),
             }
         };
     }

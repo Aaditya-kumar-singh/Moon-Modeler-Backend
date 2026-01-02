@@ -10,13 +10,8 @@ export class ExportController {
     static async exportMySQL(req: NextRequest) {
         try {
             const body = await req.json();
-            const validation = ExportSchema.safeParse(body);
+            const { content } = ExportSchema.parse(body); // Throws ZodError on failure
 
-            if (!validation.success) {
-                return ResponseUtil.error(JSON.stringify(validation.error.issues), 400, 'VALIDATION_ERROR');
-            }
-
-            const { content } = validation.data;
             ProjectsValidator.validateDiagram(content);
             const sql = MysqlExporter.generate(content);
 
@@ -29,13 +24,8 @@ export class ExportController {
     static async exportMongoDB(req: NextRequest) {
         try {
             const body = await req.json();
-            const validation = ExportSchema.safeParse(body);
+            const { content } = ExportSchema.parse(body); // Throws ZodError on failure
 
-            if (!validation.success) {
-                return ResponseUtil.error(JSON.stringify(validation.error.issues), 400, 'VALIDATION_ERROR');
-            }
-
-            const { content } = validation.data;
             ProjectsValidator.validateDiagram(content);
             const scripts = MongoExporter.generate(content);
 
